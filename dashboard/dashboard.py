@@ -55,21 +55,94 @@ page = st.sidebar.radio(
     ["Overview", "Volume & Ketepatan Pengiriman", "Review vs AOV", "RFM Analysis"],
 )
 
+# ---- Fitur interaktif: Filter berdasarkan Tahun dan State (memengaruhi visualisasi) ----
+years_available = []
+if "order_year" in main_df.columns:
+    years_available = sorted(main_df["order_year"].dropna().unique().astype(int).tolist())
+if "order_year" in main_df.columns:
+    selected_years = st.sidebar.multiselect(
+        "🔍 Filter Tahun",
+        options=years_available,
+        default=years_available,
+        help="Memengaruhi Overview, Volume & Ketepatan, Review vs AOV (per kota), dan RFM Analysis.",
+    )
+    if not selected_years:
+        selected_years = years_available
+else:
+    selected_years = None
+
+if "customer_state" in main_df.columns:
+    states = ["Semua"] + sorted(
+        main_df["customer_state"].dropna().unique().astype(str).tolist()
+    )
+    selected_state = st.sidebar.selectbox(
+        "🔍 Filter berdasarkan State",
+        options=states,
+        help="Pilih state untuk memfilter data. Memengaruhi Overview, Volume & Ketepatan, Review vs AOV (per kota), dan RFM Analysis.",
+    )
+else:
+    selected_state = "Semua"
+
+# Terapkan filter tahun dan state
+if selected_years is not None and "order_year" in main_df.columns:
+    df_by_year_city = main_df[main_df["order_year"].isin(selected_years)].copy()
+else:
+    df_by_year_city = main_df.copy()
+
+if selected_state != "Semua" and "customer_state" in df_by_year_city.columns:
+    df_by_year_city = df_by_year_city[df_by_year_city["customer_state"] == selected_state].copy()
+
+# Agregasi per kota (gabungkan beberapa tahun jadi satu baris per kota untuk tampilan)
+if "order_year" in df_by_year_city.columns and len(df_by_year_city) > 0:
+    agg_map = {
+        "total_orders": ("total_orders", "sum"),
+        "on_time_count": ("on_time_count", "sum"),
+        "customer_state": ("customer_state", "first"),
+        "lat": ("lat", "first"),
+        "lng": ("lng", "first"),
+        "avg_review_score": ("avg_review_score", "mean"),
+        "review_count": ("review_count", "sum"),
+    }
+    if "avg_order_value" in df_by_year_city.columns:
+        agg_map["avg_order_value"] = ("avg_order_value", "mean")
+    df_filtered = (
+        df_by_year_city.groupby("customer_city")
+        .agg(**agg_map)
+        .reset_index()
+    )
+    df_filtered["on_time_pct"] = (
+        df_filtered["on_time_count"] / df_filtered["total_orders"] * 100
+    ).round(2)
+    df_filtered = df_filtered.sort_values("total_orders", ascending=False)
+else:
+    df_filtered = df_by_year_city.sort_values("total_orders", ascending=False).copy()
+    if len(df_filtered) > 0 and "on_time_count" in df_filtered.columns:
+        df_filtered["on_time_pct"] = (
+            df_filtered["on_time_count"] / df_filtered["total_orders"] * 100
+        ).round(2)
+
 if page == "Overview":
     st.header("Overview")
+    filter_desc = []
+    if selected_years is not None and years_available and len(selected_years) < len(years_available):
+        filter_desc.append(f"Tahun: {', '.join(map(str, selected_years))}")
+    if selected_state and selected_state != "Semua":
+        filter_desc.append(f"State: {selected_state}")
+    if filter_desc:
+        st.caption(" | ".join(filter_desc))
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.metric("Total Kota", f"{len(main_df):,}")
+        st.metric("Total Kota", f"{len(df_filtered):,}")
     with col2:
-        st.metric("Total Order (Semua Kota)", f"{main_df['total_orders'].sum():,}")
+        st.metric("Total Order (Semua Kota)", f"{df_filtered['total_orders'].sum():,}")
     with col3:
-        top_city = main_df.iloc[0]
+        top_city = df_filtered.iloc[0]
         st.metric("Kota Teratas", top_city["customer_city"].title())
     with col4:
         st.metric("Order Kota Teratas", f"{int(top_city['total_orders']):,}")
 
     st.subheader("Top 10 Kota by Volume Transaksi")
-    top10 = main_df.head(10).copy()
+    top10 = df_filtered.head(10).copy()
     fig = px.bar(
         top10,
         x="total_orders",
@@ -106,7 +179,7 @@ if page == "Overview":
         subset_cols = ["lat", "lng"]
         if has_review:
             subset_cols.append("avg_review_score")
-        geo_df = main_df.dropna(subset=subset_cols).copy()
+        geo_df = df_filtered.dropna(subset=subset_cols).copy()
         geo_df = geo_df[geo_df["total_orders"] >= 100]
 
         if geo_df.empty:
@@ -162,13 +235,16 @@ elif page == "Volume & Ketepatan Pengiriman":
     st.markdown("""
     **Pertanyaan:** Kota mana di Brasil yang memiliki volume transaksi tertinggi, dan bagaimana korelasi antara jumlah order dengan persentase ketepatan pengiriman di kota tersebut selama 2017–2018?
     """)
-    
-    top_city = main_df.iloc[0]
+    if selected_years is not None and years_available and len(selected_years) < len(years_available):
+        st.caption(f"Filter aktif: **Tahun {selected_years}** — visualisasi mengikuti filter tahun dan state.")
+    elif selected_state and selected_state != "Semua":
+        st.caption(f"Filter aktif: **State {selected_state}** — visualisasi mengikuti filter.")
+    top_city = df_filtered.iloc[0]
     st.success(f"**Kota dengan volume tertinggi:** {top_city['customer_city'].title()} dengan {int(top_city['total_orders']):,} order dan ketepatan pengiriman {top_city['on_time_pct']:.1f}%")
     
     col1, col2 = st.columns(2)
     with col1:
-        top10 = main_df.head(10).copy()
+        top10 = df_filtered.head(10).copy()
         fig1 = px.bar(
             top10,
             x="total_orders",
@@ -188,9 +264,9 @@ elif page == "Volume & Ketepatan Pengiriman":
         st.plotly_chart(fig1, width="stretch")
     
     with col2:
-        corr = main_df["total_orders"].corr(main_df["on_time_pct"])
+        corr = df_filtered["total_orders"].corr(df_filtered["on_time_pct"])
         fig2 = px.scatter(
-            main_df,
+            df_filtered,
             x="total_orders",
             y="on_time_pct",
             hover_data=["customer_city"],
@@ -201,7 +277,7 @@ elif page == "Volume & Ketepatan Pengiriman":
             hovertemplate="<b>Kota: %{customdata[0]}</b><br>"
             "Jumlah order: %{x}<br>"
             "Ketepatan pengiriman: %{y:.1f}%<extra></extra>",
-            customdata=main_df[["customer_city"]],
+            customdata=df_filtered[["customer_city"]],
         )
         fig2.add_trace(
             go.Scatter(
@@ -217,40 +293,76 @@ elif page == "Volume & Ketepatan Pengiriman":
 elif page == "Review vs AOV":
     st.header("Review Score vs Average Order Value")
     st.markdown("""
-    **Pertanyaan:** Apakah kategori produk dengan review score tertinggi juga memiliki Average Order Value yang lebih tinggi dibandingkan kategori dengan review score rendah selama 2017–2018?
+    **Pertanyaan bisnis:** Bagaimana hubungan antara review score dengan Average Order Value (AOV) berdasarkan kota selama 2017–2018?  
+    Kota yang ditampilkan mengikuti filter **Tahun** dan **State** di sidebar.
     """)
+    if selected_state and selected_state != "Semua":
+        st.caption(f"Menampilkan kota di **State: {selected_state}**.")
     
-    top5_review = category_df.nlargest(5, 'avg_review_score')
-    low5_review = category_df.nsmallest(5, 'avg_review_score')
-    aov_high = top5_review['avg_order_value'].mean()
-    aov_low = low5_review['avg_order_value'].mean()
-    
-    if aov_high > aov_low:
-        st.info(f"Kategori review tinggi memiliki AOV rata-rata **{aov_high:.2f} BRL** vs review rendah **{aov_low:.2f} BRL**")
+    has_aov = "avg_order_value" in df_filtered.columns
+    if df_filtered.empty or "avg_review_score" not in df_filtered.columns:
+        st.info("Tidak ada data kota dengan review score. Pastikan main_data.csv berisi kolom avg_review_score.")
+    elif has_aov:
+        city_review = df_filtered.dropna(subset=["avg_review_score", "avg_order_value"]).copy()
+        city_review = city_review[city_review["total_orders"] >= 10]
+        if not city_review.empty:
+            corr_city = city_review["avg_review_score"].corr(city_review["avg_order_value"])
+            fig_city = px.scatter(
+                city_review,
+                x="avg_review_score",
+                y="avg_order_value",
+                hover_name="customer_city",
+                color="on_time_pct",
+                color_continuous_scale="RdYlGn",
+                size="review_count",
+                labels={
+                    "avg_review_score": "Rata-rata Review Score",
+                    "avg_order_value": "AOV (BRL)",
+                    "on_time_pct": "Ketepatan (%)",
+                },
+                title=f"Review Score vs AOV per Kota (korelasi r = {corr_city:.3f})",
+            )
+            fig_city.update_traces(
+                hovertemplate="<b>%{hovertext}</b><br>"
+                "Review: %{x:.2f}<br>"
+                "AOV: %{y:.2f} BRL<br>"
+                "Ketepatan: %{marker.color:.1f}%<extra></extra>"
+            )
+            st.plotly_chart(fig_city, width="stretch")
+            with st.expander("Tabel data kota"):
+                show_cols = ["customer_city", "customer_state", "total_orders", "on_time_pct", "avg_review_score", "avg_order_value", "review_count"]
+                show_cols = [c for c in show_cols if c in city_review.columns]
+                st.dataframe(
+                    city_review[show_cols].sort_values("total_orders", ascending=False).head(50),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+        else:
+            st.warning("Tidak ada kota dengan minimal 10 order dan data review/AOV.")
     else:
-        st.warning(f"Kategori review tinggi AOV: **{aov_high:.2f} BRL** vs review rendah: **{aov_low:.2f} BRL** - Tidak selalu berkorelasi positif")
-    
-    fig = px.scatter(
-        category_df,
-        x="avg_review_score",
-        y="avg_order_value",
-        size="order_count",
-        hover_name="product_category_name_english",
-        labels={"avg_review_score": "Rata-rata Review Score", "avg_order_value": "AOV (BRL = Real Brasil)"},
-        title="Review Score vs AOV per Kategori Produk",
-        color="avg_review_score",
-        color_continuous_scale="RdYlGn",
-    )
-    fig.update_traces(
-        hovertemplate="<b>Kategori: %{hovertext}</b><br>"
-        "Rata-rata review: %{x:.2f}<br>"
-        "AOV: %{y:.2f} BRL<br>"
-        "Jumlah order: %{marker.size:.0f}<extra></extra>"
-    )
-    st.plotly_chart(fig, width="stretch")
+        st.info(
+            "Kolom **avg_order_value** belum ada di main_data.csv. "
+            "Jalankan ulang `python generate_data.py` dari folder dashboard agar grafik Review vs AOV per kota menampilkan AOV."
+        )
 
 elif page == "RFM Analysis":
     st.header("RFM Analysis - Segmentasi Pelanggan")
+    # Terapkan filter tahun dan state ke RFM
+    rfm_filtered = rfm_df.copy()
+    filter_parts = []
+    if "order_year" in rfm_df.columns and selected_years is not None and len(selected_years) > 0:
+        rfm_filtered = rfm_filtered[rfm_filtered["order_year"].astype(int).isin(selected_years)]
+        filter_parts.append(f"Tahun: {selected_years}")
+    if "customer_state" in rfm_df.columns and selected_state and selected_state != "Semua":
+        rfm_filtered = rfm_filtered[rfm_filtered["customer_state"] == selected_state]
+        filter_parts.append(f"State: {selected_state}")
+    if filter_parts:
+        st.caption(f"Menampilkan **{' | '.join(filter_parts)}** — {len(rfm_filtered):,} baris data (pelanggan-tahun). Ubah filter di sidebar untuk mengubah tampilan.")
+    else:
+        st.caption(f"Menampilkan semua data ({len(rfm_filtered):,} baris). Gunakan filter Tahun dan State di sidebar untuk mempersempit.")
+    if "order_year" not in rfm_df.columns and selected_years is not None:
+        st.info("Filter Tahun belum berlaku untuk RFM (data RFM belum memiliki kolom **order_year**). Jalankan ulang `python generate_data.py` untuk memperbarui.")
+    
     st.markdown("""
     **Tujuan:** Mengelompokkan pelanggan berdasarkan Recency, Frequency, Monetary untuk strategi pemasaran.
     - **Champions:** Pelanggan paling loyal dengan transaksi terbaru, sering, dan bernilai tinggi.
@@ -260,7 +372,7 @@ elif page == "RFM Analysis":
     - **Others:** Pelanggan dengan pola transaksi sedang atau tidak konsisten.
     """)
     
-    segment_counts = rfm_df['Segment'].value_counts()
+    segment_counts = rfm_filtered['Segment'].value_counts()
     col1, col2, col3, col4 = st.columns(4)
     for i, (seg, count) in enumerate(segment_counts.head(4).items()):
         with [col1, col2, col3, col4][i]:
@@ -269,7 +381,9 @@ elif page == "RFM Analysis":
     fig = px.pie(
         values=segment_counts.values,
         names=segment_counts.index,
-        title="Distribusi Segment RFM",
+        title="Distribusi Segment RFM"
+        + (f" — Tahun {selected_years}" if selected_years and "order_year" in rfm_df.columns else "")
+        + (f" — State {selected_state}" if selected_state and selected_state != "Semua" and "customer_state" in rfm_df.columns else ""),
         color_discrete_sequence=px.colors.qualitative.Set3,
     )
     fig.update_traces(
