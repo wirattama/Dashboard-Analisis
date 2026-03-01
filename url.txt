@@ -1,0 +1,4 @@
+# Setelah deploy ke Streamlit Cloud, isi baris di bawah dengan URL dashboard Anda.
+# Contoh: https://nama-aplikasi-anda.streamlit.app
+
+https://your-dashboard-url-here
